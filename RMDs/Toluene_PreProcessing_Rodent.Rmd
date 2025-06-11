@@ -1,0 +1,378 @@
+---
+title: "Toluene PreProcessing Rodent"
+author: Sierra
+output:
+  html_document:
+    theme: cerulean
+    toc: false
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+```{r load packages}
+
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(ggplot2)
+library(ggpubr)
+library(ggpattern)
+library(tcpl)
+library(tcplfit2)
+library(stringr)
+library(data.table)
+library(openxlsx)
+library(readxl)
+library(conflicted)
+library(pracma)
+
+conflicts_prefer(purrr::transpose())
+conflicts_prefer(dplyr::filter())
+conflicts_prefer(data.table::minute())
+
+```
+
+#Import files and arrange data
+```{r}
+#Set wd to an export folder
+setwd("~")
+
+#Indicate input directory
+project.input.dir <-"~"
+
+#Make list of data files 
+csv_files<- list.files(path=project.input.dir, pattern = "list.csv", recursive = T, full.names = T) 
+
+#Make vector for what the names of the basenames of the data files
+data_frame_names<-gsub("_spike_list.csv","",basename(csv_files))
+data_frame_names<-gsub("6 x STD","",data_frame_names)
+data_frame_names<-gsub("_Spike Detector ","",data_frame_names)
+data_frame_names<-gsub("(000)","",data_frame_names) #Two of the same file here
+data_frame_names<-gsub("(001)","",data_frame_names)
+data_frame_names<-gsub("(002)","",data_frame_names)
+data_frame_names<-gsub("[(]","",data_frame_names)
+data_frame_names<-gsub("[)]","",data_frame_names)
+data_frame_names<-gsub("-","_",data_frame_names)
+
+#Function to read in data files and remove se endpoints from df
+#Make wllt (well type) column to indicate nontreated with n and treated with a t
+read_datafiles<-function(file){
+  data<-read.csv(file)
+  data<-select(data,-c("X","Investigator"))
+  data<- data %>% separate(Electrode, c('Well','ElectrodeNo'))
+  data<-as.data.table(data)
+    
+}
+
+#Use the read_datafiles function made above to read in data files
+datalist<-lapply(csv_files,read_datafiles)
+
+#Assign the names from the vector data_frame_names to the data frames just read in
+for (h in seq_along(datalist)){
+  assign(data_frame_names[h],datalist[[h]])
+}
+
+```
+
+#Create Minute by Minute recordings and calculate mfr and nae
+```{r}
+#create minute recordings
+for (i in data_frame_names){
+  df<-get(i)
+  df$Time..s.<-as.numeric(df$Time..s.)
+  df<-as.data.table(df)
+df<-df[, .(count = .N), by = .(Well,ElectrodeNo, interval= (minute(Time..s.) %/% 1)+1)]
+  df<-filter(df, !is.na(ElectrodeNo))
+  df<-filter(df, !is.na(interval))
+  assign(i,df)
+}
+
+#make an empty vecotr to store new dfs
+mfr_dfs<-c()
+
+#Make new dfs for mfr data
+for (j in data_frame_names){
+df<-get(j)
+new_df_name<-paste0(j,"_mfr")
+assign(new_df_name,df)
+mfr_dfs<-c(mfr_dfs,new_df_name)
+}
+
+#calculate mfr
+for (k in mfr_dfs){
+df<-get(k)
+df<-df%>%
+group_by(Well,interval)%>%
+mutate(mfr=(sum(count))/60)
+df<-df%>% select(-c(count))
+assign(k,df)
+}
+
+#make an empty vecotr to store new dfs
+SpkElec_dfs<-c()
+
+#make new dfs for Spikes/electrode data
+for (l in data_frame_names){
+df<-get(l)
+new_df_name2<-paste0(l,"_spkEle")
+assign(new_df_name2,df)
+SpkElec_dfs<-c(SpkElec_dfs,new_df_name2)
+assign(l,df)
+}
+
+#calculate spikes/electrode and active electrodes
+for (m in SpkElec_dfs){
+df<-get(m)
+df2<-df%>%
+  group_by(Well,interval,ElectrodeNo)%>%
+  mutate(Spk_per_Elec=sum(count))
+df2$ae<-ifelse(df2$Spk_per_Elec>5,1,0)
+assign(m,df2)
+}
+
+#make an empty vecotr to store new dfs
+nae_dfs<-c()
+
+#make new dfs for Spikes/electrode data
+for (n in SpkElec_dfs){
+df<-get(n)
+new_df_name3<-gsub("_spkEle$","_nae",n)
+assign(new_df_name3,df)
+nae_dfs<-c(nae_dfs,new_df_name3)
+assign(n,df)
+}
+
+#calculate number of active electrodes
+for (o in nae_dfs){
+df<-get(o)
+df<-df%>%
+group_by(Well,interval)%>%
+mutate(nae=sum(ae))
+assign(o,df)
+}
+
+#make an empty vecotr to store new dfs
+wmfr_dfs<-c()
+
+#make a new df for wmfr
+for (p in nae_dfs){
+df<-get(p)
+new_df_name4<-gsub("_nae$","_wmfr",p)
+assign(new_df_name4,df)
+wmfr_dfs<-c(wmfr_dfs,new_df_name4)
+assign(p,df)
+}
+
+#make sure that data frames do not go past 60 mintues 
+nae_dfs<-nae_dfs[sapply(nae_dfs,function(s){
+df<-get(s)
+max(df$interval)>=60
+})]
+
+```
+
+#Join mfr and wmfr data frames together 
+```{r}
+VOC_06052024_97_9334_DIV15_tol_wmfr<-full_join(VOC_06052024_97_9334_DIV15_tol_wmfr,VOC_06052024_97_9334_DIV15_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+VOC_06052024_97_9335_DIV15_tol_wmfr<-full_join(VOC_06052024_97_9335_DIV15_tol_wmfr,VOC_06052024_97_9335_DIV15_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+VOC_06052024_97_9335_DIV152_tol_wmfr<-full_join(VOC_06052024_97_9335_DIV152_tol_wmfr,VOC_06052024_97_9335_DIV152_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+VOC_06272024_97_9337_DIV14_tol_wmfr<-full_join(VOC_06272024_97_9337_DIV14_tol_wmfr,VOC_06272024_97_9337_DIV14_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+VOC_06272024_97_9338_DIV15_tol_wmfr<-full_join(VOC_06272024_97_9338_DIV15_tol_wmfr,VOC_06272024_97_9338_DIV15_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+VOC_06272024_97_9339_DIV15_tol_wmfr<-full_join(VOC_06272024_97_9339_DIV15_tol_wmfr,VOC_06272024_97_9339_DIV15_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+VOC_07032024_121_4631_DIV14_tol_wmfr<-full_join(VOC_07032024_121_4631_DIV14_tol_wmfr,VOC_07032024_121_4631_DIV14_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+VOC_07032024_121_4632_DIV14_tol_wmfr<-full_join(VOC_07032024_121_4632_DIV14_tol_wmfr,VOC_07032024_121_4632_DIV14_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+VOC_07032024_98_4614_DIV13_tol_wmfr<-full_join(VOC_07032024_98_4614_DIV13_tol_wmfr,VOC_07032024_98_4614_DIV13_tol_mfr, by=c("Well","interval","ElectrodeNo"))
+
+```
+
+
+```{r}
+for (q in nae_dfs){
+df<-get(q)
+df<-df%>%
+  group_by(Well,interval)%>%
+  summarise(nae=mean(nae))%>%
+  ungroup()
+  assign(q,df)
+}
+
+#check for nas and missing data
+for (q in nae_dfs){
+df<-get(q)
+df<-df%>%distinct(Well,interval,.keep_all=TRUE)
+df<-filter(df, !is.na(interval))
+assign(q,df)
+}
+
+```
+
+
+```{r}
+#create wmfr 
+for (q in wmfr_dfs){
+df<-get(q)
+df<-df%>%
+  group_by(Well,interval)%>%
+  summarise(wmfr=(mfr/nae))%>%
+  ungroup()
+  assign(q,df)
+}
+
+#Remove NAs and Inf
+for (r in wmfr_dfs){
+df<-get(r)
+df$wmfr<-gsub("Inf",0,df$wmfr)
+df<-df%>%distinct(Well,interval,.keep_all=TRUE)
+df<-filter(df, !is.na(interval))
+df<-filter(df, !is.na(Well))
+df$wmfr<-gsub("NA",0,df$wmfr)
+assign(r,df)
+}
+
+```
+
+#Join mfr and nae data frames together 
+```{r}
+VOC_06052024_97_9334_DIV15_tol_wmfr<-full_join(VOC_06052024_97_9334_DIV15_tol_wmfr,VOC_06052024_97_9334_DIV15_tol_nae, by=c("Well","interval"))
+
+VOC_06052024_97_9335_DIV15_tol_wmfr<-full_join(VOC_06052024_97_9335_DIV15_tol_wmfr,VOC_06052024_97_9335_DIV15_tol_nae, by=c("Well","interval"))
+
+VOC_06052024_97_9335_DIV152_tol_wmfr<-full_join(VOC_06052024_97_9335_DIV152_tol_wmfr,VOC_06052024_97_9335_DIV152_tol_nae, by=c("Well","interval"))
+
+VOC_06272024_97_9337_DIV14_tol_wmfr<-full_join(VOC_06272024_97_9337_DIV14_tol_wmfr,VOC_06272024_97_9337_DIV14_tol_nae, by=c("Well","interval"))
+
+VOC_06272024_97_9338_DIV15_tol_wmfr<-full_join(VOC_06272024_97_9338_DIV15_tol_wmfr,VOC_06272024_97_9338_DIV15_tol_nae, by=c("Well","interval"))
+
+VOC_06272024_97_9339_DIV15_tol_wmfr<-full_join(VOC_06272024_97_9339_DIV15_tol_wmfr,VOC_06272024_97_9339_DIV15_tol_nae, by=c("Well","interval"))
+
+VOC_07032024_121_4631_DIV14_tol_wmfr<-full_join(VOC_07032024_121_4631_DIV14_tol_wmfr,VOC_07032024_121_4631_DIV14_tol_nae, by=c("Well","interval"))
+
+VOC_07032024_121_4632_DIV14_tol_wmfr<-full_join(VOC_07032024_121_4632_DIV14_tol_wmfr,VOC_07032024_121_4632_DIV14_tol_nae, by=c("Well","interval"))
+
+VOC_07032024_98_4614_DIV13_tol_wmfr<-full_join(VOC_07032024_98_4614_DIV13_tol_wmfr,VOC_07032024_98_4614_DIV13_tol_nae, by=c("Well","interval"))
+
+```
+
+```{r}
+#Remove data frames that have less than 60 minute recordings 
+wmfr_dfs<-wmfr_dfs[sapply(wmfr_dfs,function(s){
+df<-get(s)
+max(df$interval)>=60
+})]
+
+#create an empty vector to store new data frames
+wmfr_dfs_Baseline<-c()
+
+#create a new data frame
+for (t in wmfr_dfs){
+df<-get(t)
+new_df_name5<-gsub("_wmfr$","_wmfr_Baseline",t)
+assign(new_df_name5,df)
+wmfr_dfs_Baseline<-c(wmfr_dfs_Baseline,new_df_name5)
+assign(t,df)
+}
+
+#create an empty vector to store new data frames
+wmfr_dfs_Toluene<-c()
+
+#create a new data frame for wmfr_tol
+for (u in wmfr_dfs){
+df<-get(u)
+new_df_name6<-gsub("_wmfr$","_wmfr_Tol",u)
+assign(new_df_name6,df)
+wmfr_dfs_Toluene<-c(wmfr_dfs_Toluene,new_df_name6)
+assign(u,df)
+}
+
+#Isolate Baseline and renumber from -15 to -1
+for (v in wmfr_dfs_Baseline){
+df<-get(v)
+df<-df%>%
+  filter(interval>=0 & interval<=15)
+df<-subset(df,interval<16) #remove any minute 16 values
+df$interval<-as.numeric(df$interval)
+df<-df%>%
+  mutate(new_interval=-(16-interval))
+setnames(df,"interval","old_interval")
+setnames(df,"new_interval","interval")
+df<-df%>%
+  ungroup()%>%
+  select(-old_interval)
+  assign(v,df)
+}
+
+#Isolate Toluene Exposure
+for (w in wmfr_dfs_Toluene){
+df<-get(w)
+df<-df%>%
+  filter(interval>15 & interval<=60)
+  df$interval<-as.numeric(df$interval)
+df<-df%>%
+  mutate(new_interval=(interval-15))
+setnames(df,"interval","old_interval")
+setnames(df,"new_interval","interval")
+df<-df%>%
+  ungroup()%>%
+  select(-old_interval)
+assign(w,df)
+}
+
+```
+
+#Row bind baseline and toluene together 
+```{r}
+
+#Full join baseline back to toluene exposure dfs for wmfr
+Plate1<-bind_rows(VOC_06052024_97_9334_DIV15_tol_wmfr,VOC_06052024_97_9334_DIV15_tol_wmfr)
+
+Plate2<-bind_rows(VOC_06052024_97_9335_DIV15_tol_wmfr,VOC_06052024_97_9335_DIV15_tol_wmfr_Baseline)
+
+#Data is mssing from Plate3- exclude from analysis
+#Plate3<-bind_rows(VOC_06052024_97_9335_DIV152_tol_wmfr,VOC_06052024_97_9335_DIV152_tol_wmfr_Baseline)
+
+Plate4<-bind_rows(VOC_06272024_97_9337_DIV14_tol_wmfr,VOC_06272024_97_9337_DIV14_tol_wmfr_Baseline)
+
+Plate5<-bind_rows(VOC_06272024_97_9338_DIV15_tol_wmfr,VOC_06272024_97_9338_DIV15_tol_wmfr_Baseline)
+
+Plate6<-bind_rows(VOC_06272024_97_9339_DIV15_tol_wmfr,VOC_06272024_97_9339_DIV15_tol_wmfr_Baseline)
+
+Plate7<-bind_rows(VOC_07032024_121_4631_DIV14_tol_wmfr,VOC_07032024_121_4631_DIV14_tol_wmfr_Baseline)
+
+Plate8<-bind_rows(VOC_07032024_121_4632_DIV14_tol_wmfr,VOC_07032024_121_4632_DIV14_tol_wmfr_Baseline)
+
+Plate9<-bind_rows(VOC_07032024_98_4614_DIV13_tol_wmfr,VOC_07032024_98_4614_DIV13_tol_wmfr_Baseline)
+
+```
+
+#Export Data
+```{r}
+#Add plate numbers into dfs (each recroding csv is its own plate)
+Plate1$Plate<-c(1)
+Plate2$Plate<-c(2)
+
+Plate4$Plate<-c(4)
+Plate5$Plate<-c(5)
+Plate6$Plate<-c(6)
+Plate7$Plate<-c(7)
+Plate8$Plate<-c(8)
+Plate9$Plate<-c(9)
+
+#bind all plates together
+All_Plates_Raw<-bind_rows(Plate1,Plate2,Plate4,Plate5,Plate6,Plate7,Plate8,Plate9)
+
+meta<-read.csv("~")
+
+#full join with meta
+All_Plates_Raw<-full_join(All_Plates_Raw,meta, by = c("Well"))
+
+write.csv(All_Plates_Raw,file = "~")
+```

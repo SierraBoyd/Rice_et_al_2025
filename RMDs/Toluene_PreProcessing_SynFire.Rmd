@@ -1,0 +1,309 @@
+---
+title: "Toluene PreProcessing for SynFire Cells"
+author: Sierra
+output:
+  html_document:
+    theme: cerulean
+    toc: false
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+```{r load packages}
+
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(ggplot2)
+library(ggpubr)
+library(ggpattern)
+library(tcpl)
+library(tcplfit2)
+library(stringr)
+library(data.table)
+library(openxlsx)
+library(readxl)
+library(conflicted)
+library(pracma)
+
+conflicts_prefer(purrr::transpose())
+conflicts_prefer(dplyr::filter())
+conflicts_prefer(data.table::minute())
+
+```
+
+#Import files and arrange data
+```{r}
+#Indicate input directory
+project.input.dir <-"~"
+
+#Make list of data files 
+csv_files<- list.files(path=project.input.dir, pattern = "e_spikelist", recursive = T, full.names = T) 
+
+#Make vector for what the names of the basenames of the data files
+data_frame_names<-gsub(".csv","",basename(csv_files))
+
+#Function to read in data files and remove se endpoints from df
+#Make wllt (well type) column to indicate non-treated with n and treated with a t
+read_datafiles<-function(file){
+  data<-read.csv(file)
+  data<-select(data,-c("Investigator","X"))
+  data<- data %>% separate(Electrode, c('Well','ElectrodeNo'))
+  data<-as.data.table(data)
+    
+    }
+
+#Use the read_datafiles function made above to read in data files
+datalist<-lapply(csv_files,read_datafiles)
+
+#Assign the names from the vector data_frame_names to the data frames just read in
+for (h in seq_along(datalist)){
+  assign(data_frame_names[h],datalist[[h]])
+}
+
+```
+
+#Create Minute by Minute recordings and calculate mfr and nae
+```{r}
+#create minute recordings from second recordings
+for (i in data_frame_names){
+  df<-get(i)
+  df$Time..s.<-as.numeric(df$Time..s.)
+  df<-as.data.table(df)
+df<-df[, .(count = .N), by = .(Well,ElectrodeNo, interval= (minute(Time..s.) %/% 1)+1)]
+  df<-filter(df, !is.na(ElectrodeNo))
+  df<-filter(df, !is.na(interval))
+  assign(i,df)
+}
+
+#Check length of dfs
+length(unique(VOC_20241113_Plate2_DIV32_Toluene_spikelist$interval))
+
+#Make new dfs for mfr data
+mfr_dfs<-c()
+
+for (j in data_frame_names){
+df<-get(j)
+new_df_name<-paste0(j,"_mfr")
+assign(new_df_name,df)
+mfr_dfs<-c(mfr_dfs,new_df_name)
+}
+
+#calculate mfr
+for (k in mfr_dfs){
+df<-get(k)
+df<-df%>%
+group_by(Well,interval)%>%
+mutate(mfr=sum(count)/60)
+df<-df%>% select(-c(count))
+assign(k,df)
+}
+
+#make an empty vector to store new dfs
+SpkElec_dfs<-c()
+
+#make new dfs for Spikes/electrode data
+for (l in data_frame_names){
+df<-get(l)
+new_df_name2<-paste0(l,"_spkEle")
+assign(new_df_name2,df)
+SpkElec_dfs<-c(SpkElec_dfs,new_df_name2)
+assign(l,df)
+}
+
+#calculate spikes/electrode and active electrodes
+for (m in SpkElec_dfs){
+df<-get(m)
+df2<-df%>%
+  group_by(Well,interval,ElectrodeNo)%>%
+  mutate(Spk_per_Elec=sum(count))
+df2$ae<-ifelse(df2$Spk_per_Elec>5,1,0)
+assign(m,df2)
+}
+
+#make an empty vector to store new dfs
+nae_dfs<-c()
+
+#make new dfs for Spikes/electrode data
+for (n in SpkElec_dfs){
+df<-get(n)
+new_df_name3<-gsub("_spkEle$","_nae",n)
+assign(new_df_name3,df)
+nae_dfs<-c(nae_dfs,new_df_name3)
+assign(n,df)
+}
+
+#calculate number of active electrodes
+for (o in nae_dfs){
+df<-get(o)
+df<-df%>%
+group_by(Well,interval)%>%
+mutate(nae=sum(ae))
+assign(o,df)
+}
+
+#make an empty vector to store new dfs
+wmfr_dfs<-c()
+
+#make new dfs for wmfr data
+for (p in nae_dfs){
+df<-get(p)
+new_df_name4<-gsub("_nae$","_wmfr",p)
+assign(new_df_name4,df)
+wmfr_dfs<-c(wmfr_dfs,new_df_name4)
+assign(p,df)
+}
+
+```
+
+#Full Join mfr and wmfr
+```{r}
+VOC_20241113_Plate2_DIV32_Baseline_spikelist_wmfr<-full_join(VOC_20241113_Plate2_DIV32_Baseline_spikelist_wmfr,VOC_20241113_Plate2_DIV32_Baseline_spikelist_mfr, by = c("Well","interval","ElectrodeNo"))
+
+VOC_20241113_Plate2_DIV32_Toluene_spikelist_wmfr<-full_join(VOC_20241113_Plate2_DIV32_Toluene_spikelist_wmfr,VOC_20241113_Plate2_DIV32_Toluene_spikelist_mfr, by = c("Well","interval","ElectrodeNo"))
+
+VOC_20241113_Plate3_DIV35_Baseline_spikelist_wmfr<-full_join(VOC_20241113_Plate3_DIV35_Baseline_spikelist_wmfr,VOC_20241113_Plate3_DIV35_Baseline_spikelist_mfr, by = c("Well","interval","ElectrodeNo"))
+
+VOC_20241113_Plate3_DIV35_Toluene_spikelist_wmfr<-full_join(VOC_20241113_Plate3_DIV35_Toluene_spikelist_wmfr,VOC_20241113_Plate3_DIV35_Toluene_spikelist_mfr, by = c("Well","interval","ElectrodeNo"))
+
+VOC_20241113_Plate4_DIV35_Toluene_spikelist_wmfr<-full_join(VOC_20241113_Plate4_DIV35_Toluene_spikelist_wmfr,VOC_2024113_Plate4_DIV35_Baseline_spikelist_mfr, by = c("Well","interval","ElectrodeNo"))
+
+VOC_2024113_Plate4_DIV35_Baseline_spikelist_wmfr<-full_join(VOC_2024113_Plate4_DIV35_Baseline_spikelist_wmfr,VOC_2024113_Plate4_DIV35_Baseline_spikelist_mfr, by = c("Well","interval","ElectrodeNo"))
+
+VOC_20241113_Plate1_DIV32Baseline_spikelist_wmfr<-full_join(VOC_20241113_Plate1_DIV32Baseline_spikelist_wmfr,VOC_20241113_Plate1_DIV32Baseline_spikelist_mfr, by = c("Well","interval","ElectrodeNo"))
+
+```
+
+
+```{r}
+#create wmfr endpoint
+for (q in wmfr_dfs){
+df<-get(q)
+df<-df%>%
+  group_by(Well,interval)%>%
+  summarise(wmfr=(mfr/nae))
+  assign(q,df)
+}
+
+#Remove NAs and Inf
+for (r in wmfr_dfs){
+df<-get(r)
+df$wmfr<-gsub("Inf",0,df$wmfr)
+df<-df%>%distinct(Well,interval,.keep_all=TRUE)
+df<-filter(df, !is.na(interval))
+df<-filter(df, !is.na(Well))
+df$wmfr<-gsub("NA",0,df$wmfr)
+assign(r,df)
+}
+
+```
+
+
+```{r}
+#Create Baseline vector
+Baseline<-c("VOC_2024113_Plate4_DIV35_Baseline_spikelist_wmfr","VOC_20241113_Plate2_DIV32_Baseline_spikelist_wmfr","VOC_20241113_Plate3_DIV35_Baseline_spikelist_wmfr","VOC_20241113_Plate1_DIV32Baseline_spikelist_wmfr")
+
+#Renumber the time intervals in the baseline files (so -15 to 0=baseline recordings, and make toluene exposure recordings go from 1-60)
+for (t in Baseline){
+  df<-get(t)
+  df<-subset(df,interval<16) #remove any minute 16 values
+  df$interval<-as.numeric(df$interval)
+  df<-df%>%
+  mutate(new_interval=-(16-interval))
+  setnames(df,"interval","old_interval")
+  setnames(df,"new_interval","interval")
+  df<-df%>%
+    ungroup()%>%
+    select(-old_interval)
+  assign(t,df)
+}
+
+```
+
+#Normalize data
+```{r}
+#prep nae data frames for normalizing
+for (t in nae_dfs){
+df<-get(t)
+df<-df%>%select(-c("ElectrodeNo","count","ae","Spk_per_Elec"))
+df<-df%>%distinct(Well,interval,.keep_all=TRUE)
+df<-filter(df, !is.na(interval))
+assign(t,df)
+}
+
+#Indicate baseline data frames
+Baseline<-c("VOC_2024113_Plate4_DIV35_Baseline_spikelist_nae","VOC_20241113_Plate2_DIV32_Baseline_spikelist_nae","VOC_20241113_Plate3_DIV35_Baseline_spikelist_nae","VOC_20241113_Plate1_DIV32Baseline_spikelist_nae")
+
+#Renumber the time intervals in the baseline files
+for (u in Baseline){
+  df<-get(u)
+  df<-subset(df,interval<16) #remove any minute 16 values (recordings that went longer than 15 minutes)
+  df$interval<-as.numeric(df$interval)
+  df<-df%>%
+  mutate(new_interval=-(16-interval))
+  setnames(df,"interval","old_interval")
+  setnames(df,"new_interval","interval")
+  df<-df%>%
+    ungroup()%>%
+    select(-old_interval)
+  assign(u,df)
+}
+
+#Full join baseline back to toluene exposure dfs for nae
+Plate4_nae<-bind_rows(VOC_2024113_Plate4_DIV35_Baseline_spikelist_nae,VOC_20241113_Plate4_DIV35_Toluene_spikelist_nae)
+
+Plate2_nae<-bind_rows(VOC_20241113_Plate2_DIV32_Baseline_spikelist_nae,VOC_20241113_Plate2_DIV32_Toluene_spikelist_nae)
+
+Plate3_nae<-bind_rows(VOC_20241113_Plate3_DIV35_Baseline_spikelist_nae,VOC_20241113_Plate3_DIV35_Toluene_spikelist_nae)
+
+Plate1_nae<-VOC_20241113_Plate1_DIV32Baseline_spikelist_nae
+
+```
+
+#Row bind baseline and toluene together 
+```{r}
+
+#Full join baseline back to toluene exposure dfs for wmfr
+Plate4<-bind_rows(VOC_2024113_Plate4_DIV35_Baseline_spikelist_wmfr,VOC_20241113_Plate4_DIV35_Toluene_spikelist_wmfr)
+
+Plate2<-bind_rows(VOC_20241113_Plate2_DIV32_Baseline_spikelist_wmfr,VOC_20241113_Plate2_DIV32_Toluene_spikelist_wmfr)
+
+Plate3<-bind_rows(VOC_20241113_Plate3_DIV35_Baseline_spikelist_wmfr,VOC_20241113_Plate3_DIV35_Toluene_spikelist_wmfr)
+
+Plate1<-VOC_20241113_Plate1_DIV32Baseline_spikelist_wmfr
+
+```
+
+#Full join nae data
+```{r}
+#Join wmfr and nae dfs together
+Plate4<-full_join(Plate4,Plate4_nae, by = c("Well","interval"))
+
+Plate2<-full_join(Plate2,Plate2_nae, by = c("Well","interval"))
+
+Plate3<-full_join(Plate3,Plate3_nae, by = c("Well","interval"))
+
+Plate1<-full_join(Plate1,Plate1_nae, by = c("Well","interval"))
+
+```
+
+#Export Data
+```{r}
+#Add plate numbers into dfs (each raw csv file is its own plate)
+Plate4$Plate<-c(4)
+Plate2$Plate<-c(2)
+Plate3$Plate<-c(3)
+Plate1$Plate<-c(1)
+
+#read in meta file
+meta<-read.csv("~")
+
+#bind all plates together
+All_Plates_Raw<-bind_rows(Plate4,Plate2,Plate3,Plate1)
+
+#full join with meta
+All_Plates_Raw<-full_join(All_Plates_Raw,meta, by = c("Well"))
+
+write.csv(All_Plates_Raw,file = "~")
+```

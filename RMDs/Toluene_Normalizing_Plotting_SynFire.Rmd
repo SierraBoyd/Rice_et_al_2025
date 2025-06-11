@@ -1,0 +1,229 @@
+---
+title: "Toluene Normalizing and Plotting for SynFire Data"
+author: Sierra
+output:
+  html_document:
+    theme: cerulean
+    toc: false
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+```{r load packages}
+
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(ggplot2)
+library(ggpubr)
+library(ggpattern)
+library(tcpl)
+library(tcplfit2)
+library(stringr)
+library(data.table)
+library(openxlsx)
+library(readxl)
+library(conflicted)
+library(pracma)
+library(pheatmap)
+library(grid)
+
+conflicts_prefer(purrr::transpose())
+conflicts_prefer(dplyr::filter())
+conflicts_prefer(data.table::minute())
+
+```
+
+#Import files and arrange data
+```{r}
+
+#Set wd to an export folder
+setwd("~")
+
+#Indicate input directory
+project.input.dir <-"~"
+
+#Make list of data files 
+csv_files<- list.files(path=project.input.dir, pattern = "Toluene_PreProcessed", recursive = T, full.names = T) 
+
+#Make vector for what the names of the basenames of the data files
+data_frame_names<-gsub("2-4.csv","",basename(csv_files))
+
+#Function to read in data files and remove se endpoints from df
+#Make wllt (well type) column to indicate nontreated with n and treated with a t
+read_datafiles<-function(file){
+  data<-read.csv(file)
+  data<-as.data.table(data)
+  data%>% select(-1,)
+    
+    }
+
+#Use the read_datafiles function made above to read in data files
+datalist<-lapply(csv_files,read_datafiles)
+
+#Assign the names from the vector data_frame_names to the data frames just read in
+for (h in seq_along(datalist)){
+  assign(data_frame_names[h],datalist[[h]])
+}
+
+
+```
+
+#Arrange raw data for plotting
+```{r}
+#Update df name to avoid saving over
+All_Plates_Raw<-Toluene_PreProcessed_Plates
+
+#set wmfr as numeric and remove nas
+All_Plates_Raw$wmfr<-as.numeric(All_Plates_Raw$wmfr)
+
+All_Plates_Raw<-filter(All_Plates_Raw, !is.na(wmfr))
+
+#calculate mean wmfr and nae values for plotting
+wmfr_Means<-All_Plates_Raw%>%
+  group_by(Dose,interval)%>%
+  summarise(Mean_wmfr=mean(wmfr)) 
+
+nae_Means<-All_Plates_Raw%>%
+  group_by(Dose,interval)%>%
+  summarise(Mean_nae=mean(nae)) 
+
+#full join means 
+All_Plates_Means<-full_join(wmfr_Means,nae_Means, by = c("Dose","interval"))
+
+#Prep data for plotting
+DoseLevels<-c("Control",1250,2500,5000,10000,15000,20000)
+All_Plates_Means$Dose<-factor(All_Plates_Means$Dose,levels=DoseLevels)
+
+All_Plates_Means<-filter(All_Plates_Means, !is.na(Dose))
+All_Plates_Means<-filter(All_Plates_Means, !is.na(interval))
+
+#create identifer
+All_Plates_Raw$Identifer<-as.character(paste(All_Plates_Raw$"Plate",All_Plates_Raw$"Well",sep="_"))
+
+```
+
+#Plot raw wmfr values 
+```{r}
+P_wmfr<-ggplot(All_Plates_Means,aes(x=interval,y=Mean_wmfr,color=Dose,group=Dose))+
+  geom_line(linewidth=1.05)+
+  scale_color_manual(values=c("black","darkgreen","aquamarine3","turquoise3","dodgerblue4","purple4","orchid"))+
+  theme_minimal()+
+  ggtitle("SynFire: Weighted Mean Firing Rate (Raw)")
+P_wmfr
+```
+
+#plot raw nae values
+```{r}
+P_nae<-ggplot(All_Plates_Means,aes(x=interval,y=Mean_nae,color=Dose,group=Dose))+
+  geom_line(linewidth=1.05)+
+  scale_color_manual(values=c("black","darkgreen","aquamarine3","turquoise3","dodgerblue4","purple4","orchid"))+
+  theme_minimal()+
+  ggtitle("SynFire: Number of Active Electrodes (Raw")
+P_nae
+```
+
+#Isolate Basline recordings 
+```{r}
+#isolate baseline timepoints only
+Baseline_Total<-All_Plates_Raw[All_Plates_Raw$interval>=-15 & All_Plates_Raw$interval<=-1,]
+
+#find average nae in baseline data
+average_naes<-Baseline_Total%>%
+  group_by(Well,Plate,Identifer)%>%
+  summarise(avg_nae=mean(nae), .groups="drop")
+
+#remove wells with less than 10 nae in baseline
+wells_to_remove<-average_naes[average_naes$avg_nae<10,]$Identifer
+#remove wells here
+All_Plates_Raw<-All_Plates_Raw %>%
+  filter(!(Identifer %in% wells_to_remove))
+
+```
+
+#Normalize to baseline for each data point
+```{r}
+#Isolate baseline time points
+Baseline<-All_Plates_Raw[All_Plates_Raw$interval>=-15 & All_Plates_Raw$interval<=-1,] 
+
+#find baseline nae and wmfr by well, plate, identifier, and dose
+Baseline_Average_nae<-Baseline%>%
+  group_by(Well,Plate,Identifer,Dose)%>%
+  summarise(Base_nae=mean(nae), .groups="drop")
+
+Baseline_Average_wmfr<-Baseline%>%
+  group_by(Well,Plate,Identifer,Dose)%>%
+  summarise(Base_wmfr=mean(wmfr), .groups="drop")
+
+#Full joined nae filtered data frames with baseline averages for normalizing
+All_Plates_Raw<-full_join(All_Plates_Raw,Baseline_Average_nae, by = c("Well","Plate","Identifer","Dose"))
+
+All_Plates_Raw<-full_join(All_Plates_Raw,Baseline_Average_wmfr, by = c("Well","Plate","Identifer","Dose"))
+
+#Normalize to baseline timepoints for wmfr and nae
+Norm_wmfr<-All_Plates_Raw%>%
+  group_by(Well,Plate,Identifer,Dose,interval)%>%
+  summarise(Norm_wmfr=(((wmfr-Base_wmfr/Base_wmfr))*100), .groups="drop")
+
+Norm_nae<-All_Plates_Raw%>%
+  group_by(Well,Plate,Identifer,Dose,interval)%>%
+  summarise(Norm_nae=(((wmfr-Base_wmfr)/Base_wmfr)*100), .groups="drop")
+
+#full join normalized data back together
+All_Plates_Normalized<-full_join(Norm_nae,Norm_wmfr, by = c("Well","Plate","Identifer","Dose","interval"))
+
+#Prep data for plotting
+DoseLevels<-c("Control",1250,2500,5000,10000,15000,20000)
+All_Plates_Normalized$Dose<-factor(All_Plates_Normalized$Dose,levels=DoseLevels)
+
+#Check for NAs
+All_Plates_Normalized<-filter(All_Plates_Normalized, !is.na(Dose))
+All_Plates_Normalized<-filter(All_Plates_Normalized, !is.na(interval))
+All_Plates_Normalized<-filter(All_Plates_Normalized, !is.na(Norm_nae))
+All_Plates_Normalized<-filter(All_Plates_Normalized, !is.na(Norm_wmfr))
+All_Plates_Normalized<-subset(All_Plates_Normalized %>% filter(!grepl(Inf,Norm_nae)))
+All_Plates_Normalized<-subset(All_Plates_Normalized %>% filter(!grepl(Inf,Norm_wmfr)))
+
+```
+
+#Plot data normalized wmfr
+```{r}
+#find mean
+Normalized_wmfr_Mean<-All_Plates_Normalized%>%
+  group_by(Dose,interval)%>%
+  summarise(Mean_wmfr=mean(Norm_wmfr))
+
+#plot
+wmfr_Norm<-ggplot(Normalized_wmfr_Mean,aes(x=interval,y=Mean_wmfr,color=Dose,group=Dose))+
+  geom_line(linewidth=1.05)+
+  scale_color_manual(values=c("black","darkgreen","aquamarine3","turquoise3","dodgerblue3","purple4","orchid"))+
+  theme_minimal()+
+  xlab("Time (minutes)")+
+  ylab(bquote("Weighted Mean Firing Rate (Hz) \n(% of Control)"))
+wmfr_Norm
+
+#save
+ggsave("Synfire_wmfr_LinePlot_Normalized_AEfiltered.png",plot=wmfr_Norm,bg="white",width=10,height=4.5)
+```
+
+#Line Graph for NAE
+```{r}
+#Find the mean for NAE
+Normalized_nae_Mean<-All_Plates_Normalized%>%
+  group_by(Dose,interval)%>%
+  summarise(Mean_nae=mean(Norm_nae))
+
+#Plot
+nae_Norm<-ggplot(Normalized_nae_Mean,aes(x=interval,y=Mean_nae,color=Dose,group=Dose))+
+  geom_line(linewidth=1.05)+
+  scale_color_manual(values=c("black","darkgreen","aquamarine3","turquoise3","dodgerblue3","purple4","orchid"))+
+  theme_minimal()+
+  xlab("Time (minutes)")+
+  ylab(bquote("Mean Number of Active Electrodes\n(% of Control)"))
+
+nae_Norm
+
+#save
+ggsave("Synfire_nae_LinePlot_Normalized_AEfiltered.png",plot=nae_Norm,bg="white",width=10,height=4.5)
+```
