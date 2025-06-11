@@ -1,6 +1,6 @@
 # Rice_et_al_2025
 Contains all data used for the toluene proof of concepts studies using rodent primary cortical cells and human iPSC (SynFire) cells.
-This repository contains two folders; RMDs and Raw_Data folders. 
+This repository contains an RMD Folder: 
 The RMDs folder contains: 
 Toluene_PreProcessing_Rodent.RMD: Contains all preprocessing steps to calculate weighted mean firing rate and the number of active electrodes for all rodent data. Input: all Rodent raw csv files and the MaestroExperimentalLog_Ontogeny.csv file. Output: Preprocessed_file_Rodent.csv.
 Toluene_PreProcessing_SynFire.RMD: Contains all preprocessing steps to calculate weighted mean firing rate and the number of active electrodes for all SynFire data. Input: all SynFire raw csv files and the MaestroExperimentalLog_Ontogeny.csv file. Output: Preprocessed_file_SynFire.csv.
