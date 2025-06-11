@@ -305,5 +305,5 @@ All_Plates_Raw<-bind_rows(Plate4,Plate2,Plate3,Plate1)
 #full join with meta
 All_Plates_Raw<-full_join(All_Plates_Raw,meta, by = c("Well"))
 
-write.csv(All_Plates_Raw,file = "~")
+write.csv(Preprocessed_file_SynFire,file = "~")
 ```
