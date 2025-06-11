@@ -45,10 +45,10 @@ setwd("~")
 project.input.dir <-"~"
 
 #Make list of data files 
-csv_files<- list.files(path=project.input.dir, pattern = "Toluene_PreProcessed_Plates-9", recursive = T, full.names = T) 
+csv_files<- list.files(path=project.input.dir, pattern = "Preprocessed_file_Rodent, recursive = T, full.names = T) 
 
 #Make vector for what the names of the basenames of the data files
-data_frame_names<-gsub("-9.csv","",basename(csv_files))
+data_frame_names<-gsub(".csv","",basename(csv_files))
 
 #Function to read in data files and remove se endpoints from df
 #Make wllt (well type) column to indicate nontreated with n and treated with a t
